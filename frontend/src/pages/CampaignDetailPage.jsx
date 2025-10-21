@@ -152,14 +152,7 @@ const CampaignDetailPage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      {/* Header */}
-      <div className="bg-white border-b">
-        <div className="container mx-auto px-6 py-6">
-          <Button variant="ghost" onClick={() => navigate('/campaigns')} data-testid="back-campaigns-btn">
-            <ArrowLeft className="mr-2" /> Back to Campaigns
-          </Button>
-        </div>
-      </div>
+      <Navbar />
 
       {/* Campaign Content */}
       <div className="container mx-auto px-6 py-12">
