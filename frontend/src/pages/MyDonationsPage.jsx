@@ -88,29 +88,15 @@ const MyDonationsPage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      <Navbar />
+      
       {/* Header */}
       <div className="bg-white border-b">
-        <div className="container mx-auto px-6 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" onClick={() => navigate('/campaigns')} data-testid="back-campaigns-btn">
-                <ArrowLeft className="mr-2" /> Back
-              </Button>
-              <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>
-                My Donations
-              </h1>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate('/my-pledges')} data-testid="my-pledges-btn">
-                My Pledges
-              </Button>
-              {user?.roles?.includes('admin') && (
-                <Button onClick={() => navigate('/admin')} data-testid="admin-btn">
-                  Admin
-                </Button>
-              )}
-            </div>
-          </div>
+        <div className="container mx-auto px-6 py-8">
+          <h1 className="text-4xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>
+            My Donations
+          </h1>
+          <p className="text-gray-600 mt-2">Track your contribution history and download receipts</p>
         </div>
       </div>
 
