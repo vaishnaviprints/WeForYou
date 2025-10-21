@@ -519,3 +519,330 @@ async def volunteer_get_stats(
         'total_collections': len(donations)
     }
 
+
+# ==================== CAMPAIGN ENDPOINTS ====================
+
+@api_router.post("/campaigns", response_model=FundCampaign)
+async def create_campaign(
+    campaign_data: FundCampaignCreate,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Create a new fund campaign (Admin only)"""
+    campaign = FundCampaign(
+        **campaign_data.model_dump(),
+        created_by=current_user['sub']
+    )
+    
+    campaign_dict = campaign.model_dump()
+    campaign_dict['created_at'] = campaign_dict['created_at'].isoformat()
+    if campaign_dict.get('end_date'):
+        campaign_dict['end_date'] = campaign_dict['end_date'].isoformat()
+    
+    await db.campaigns.insert_one(campaign_dict)
+    
+    return campaign
+
+@api_router.get("/campaigns", response_model=List[FundCampaign])
+async def get_campaigns(status: Optional[str] = "active"):
+    """Get all campaigns"""
+    query = {}
+    if status:
+        query['status'] = status
+    
+    campaigns = await db.campaigns.find(query, {"_id": 0}).to_list(100)
+    
+    for campaign in campaigns:
+        if isinstance(campaign.get('created_at'), str):
+            campaign['created_at'] = datetime.fromisoformat(campaign['created_at'])
+        if campaign.get('end_date') and isinstance(campaign['end_date'], str):
+            campaign['end_date'] = datetime.fromisoformat(campaign['end_date'])
+    
+    return campaigns
+
+@api_router.get("/campaigns/{campaign_id}", response_model=CampaignWithStats)
+async def get_campaign(campaign_id: str):
+    """Get campaign details with stats"""
+    campaign_doc = await db.campaigns.find_one({"id": campaign_id}, {"_id": 0})
+    if not campaign_doc:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    if isinstance(campaign_doc.get('created_at'), str):
+        campaign_doc['created_at'] = datetime.fromisoformat(campaign_doc['created_at'])
+    if campaign_doc.get('end_date') and isinstance(campaign_doc['end_date'], str):
+        campaign_doc['end_date'] = datetime.fromisoformat(campaign_doc['end_date'])
+    
+    donations = await db.donations.find(
+        {"campaign_id": campaign_id, "status": "success", "is_anonymous": False},
+        {"_id": 0}
+    ).sort("created_at", -1).limit(5).to_list(5)
+    
+    recent_donors = []
+    for don in donations:
+        if don.get('user_id'):
+            user_doc = await db.users.find_one({"id": don['user_id']}, {"_id": 0, "full_name": 1})
+            if user_doc:
+                recent_donors.append({
+                    "name": user_doc['full_name'],
+                    "amount": don['amount'],
+                    "date": don['created_at']
+                })
+        elif don.get('donor_name'):
+            recent_donors.append({
+                "name": don['donor_name'],
+                "amount": don['amount'],
+                "date": don['created_at']
+            })
+    
+    campaign_doc['recent_donors'] = recent_donors
+    
+    return CampaignWithStats(**campaign_doc)
+
+@api_router.patch("/admin/campaigns/{campaign_id}/status")
+async def update_campaign_status(
+    campaign_id: str,
+    status: str,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Update campaign status"""
+    await db.campaigns.update_one(
+        {"id": campaign_id},
+        {"$set": {"status": status}}
+    )
+    return {"status": "success"}
+
+@api_router.delete("/admin/campaigns/{campaign_id}")
+async def delete_campaign(
+    campaign_id: str,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Delete campaign"""
+    await db.campaigns.delete_one({"id": campaign_id})
+    return {"status": "success", "message": "Campaign deleted"}
+
+# ==================== DONATION ENDPOINTS ====================
+
+@api_router.post("/donations", response_model=dict)
+async def create_donation(
+    donation_data: DonationCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create a new donation (requires login)"""
+    campaign = await db.campaigns.find_one({"id": donation_data.campaign_id})
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    if donation_data.want_80g:
+        if not donation_data.pan or not donation_data.legal_name:
+            raise HTTPException(status_code=400, detail="PAN and Legal Name required for 80G receipt")
+    
+    donation = Donation(
+        **donation_data.model_dump(),
+        user_id=current_user['sub']
+    )
+    
+    donation_dict = donation.model_dump()
+    donation_dict['created_at'] = donation_dict['created_at'].isoformat()
+    donation_dict['updated_at'] = donation_dict['updated_at'].isoformat()
+    
+    await db.donations.insert_one(donation_dict)
+    
+    user_doc = await db.users.find_one({"id": current_user['sub']})
+    order = await payment_service.create_order(
+        amount=donation.amount,
+        currency=donation.currency,
+        donation_id=donation.id,
+        user_email=user_doc['email']
+    )
+    
+    attempt = PaymentAttempt(
+        donation_id=donation.id,
+        provider_payload=order
+    )
+    attempt_dict = attempt.model_dump()
+    attempt_dict['created_at'] = attempt_dict['created_at'].isoformat()
+    await db.payment_attempts.insert_one(attempt_dict)
+    
+    return {
+        "donation_id": donation.id,
+        "order": order,
+        "razorpay_key": payment_service.razorpay_key_id or "mock_key"
+    }
+
+@api_router.post("/donations/{donation_id}/verify")
+async def verify_donation(
+    donation_id: str,
+    payment_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Verify and complete donation payment"""
+    donation_doc = await db.donations.find_one({"id": donation_id})
+    if not donation_doc:
+        raise HTTPException(status_code=404, detail="Donation not found")
+    
+    if donation_doc.get('user_id') and donation_doc['user_id'] != current_user['sub']:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    is_valid = await payment_service.verify_payment(
+        order_id=payment_data.get('razorpay_order_id', ''),
+        payment_id=payment_data.get('razorpay_payment_id', ''),
+        signature=payment_data.get('razorpay_signature', '')
+    )
+    
+    if is_valid:
+        await db.donations.update_one(
+            {"id": donation_id},
+            {
+                "$set": {
+                    "status": "success",
+                    "payment_ref": payment_data.get('razorpay_payment_id'),
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }
+            }
+        )
+        
+        await db.campaigns.update_one(
+            {"id": donation_doc['campaign_id']},
+            {
+                "$inc": {
+                    "current_amount": donation_doc['amount'],
+                    "donor_count": 1
+                }
+            }
+        )
+        
+        await generate_receipt_background(donation_id)
+        
+        # Send confirmation
+        if donation_doc.get('donor_phone'):
+            await notification_service.send_donation_confirmation(
+                {**donation_doc, 'campaign_title': 'campaign'},
+                donation_doc['donor_phone']
+            )
+        
+        return {"status": "success", "message": "Payment verified and receipt generated"}
+    else:
+        await db.donations.update_one(
+            {"id": donation_id},
+            {"$set": {"status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        raise HTTPException(status_code=400, detail="Payment verification failed")
+
+async def generate_receipt_background(donation_id: str):
+    """Background task to generate receipt"""
+    try:
+        donation_doc = await db.donations.find_one({"id": donation_id}, {"_id": 0})
+        if not donation_doc:
+            return
+        
+        if donation_doc.get('user_id'):
+            user_doc = await db.users.find_one({"id": donation_doc['user_id']}, {"_id": 0})
+        else:
+            user_doc = {
+                'full_name': donation_doc.get('donor_name', 'Anonymous'),
+                'email': donation_doc.get('donor_email', 'N/A')
+            }
+        
+        campaign_doc = await db.campaigns.find_one({"id": donation_doc['campaign_id']}, {"_id": 0})
+        
+        receipt_count = await db.receipts.count_documents({}) + 1
+        receipt_number = f"WFY{datetime.now().year}{receipt_count:05d}"
+        
+        created_at = datetime.fromisoformat(donation_doc['created_at'])
+        fy = pdf_service.get_financial_year(created_at)
+        
+        receipt = DonationReceipt(
+            donation_id=donation_id,
+            receipt_number=receipt_number,
+            pdf_url="",
+            fy=fy,
+            section_80g=donation_doc.get('want_80g', False)
+        )
+        
+        receipt_dict = receipt.model_dump()
+        
+        pdf_path = await pdf_service.generate_receipt_pdf(
+            donation=donation_doc,
+            user=user_doc,
+            campaign=campaign_doc,
+            receipt=receipt_dict
+        )
+        
+        receipt_dict['pdf_url'] = pdf_path
+        receipt_dict['issued_at'] = receipt_dict['issued_at'].isoformat()
+        
+        await db.receipts.insert_one(receipt_dict)
+        
+        await db.donations.update_one(
+            {"id": donation_id},
+            {"$set": {"receipt_id": receipt.id}}
+        )
+        
+    except Exception as e:
+        logging.error(f"Receipt generation failed for {donation_id}: {str(e)}")
+
+@api_router.get("/donations/my", response_model=List[DonationWithReceipt])
+async def get_my_donations(
+    status: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get current user's donations"""
+    query = {"user_id": current_user['sub']}
+    if status:
+        query['status'] = status
+    
+    donations = await db.donations.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    
+    result = []
+    for don in donations:
+        if isinstance(don.get('created_at'), str):
+            don['created_at'] = datetime.fromisoformat(don['created_at'])
+        if isinstance(don.get('updated_at'), str):
+            don['updated_at'] = datetime.fromisoformat(don['updated_at'])
+        
+        receipt = None
+        if don.get('receipt_id'):
+            receipt_doc = await db.receipts.find_one({"id": don['receipt_id']}, {"_id": 0})
+            if receipt_doc and isinstance(receipt_doc.get('issued_at'), str):
+                receipt_doc['issued_at'] = datetime.fromisoformat(receipt_doc['issued_at'])
+                receipt = DonationReceipt(**receipt_doc)
+        
+        campaign = await db.campaigns.find_one({"id": don['campaign_id']}, {"_id": 0, "title": 1})
+        don['campaign_title'] = campaign['title'] if campaign else "Unknown"
+        don['receipt'] = receipt
+        
+        result.append(DonationWithReceipt(**don))
+    
+    return result
+
+@api_router.get("/donations/{donation_id}/receipt")
+async def download_receipt(
+    donation_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Download donation receipt PDF"""
+    donation_doc = await db.donations.find_one({"id": donation_id})
+    if not donation_doc:
+        raise HTTPException(status_code=404, detail="Donation not found")
+    
+    if donation_doc.get('user_id') and donation_doc['user_id'] != current_user['sub']:
+        # Check if admin
+        if 'admin' not in current_user.get('roles', []):
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    if not donation_doc.get('receipt_id'):
+        raise HTTPException(status_code=404, detail="Receipt not yet generated")
+    
+    receipt_doc = await db.receipts.find_one({"id": donation_doc['receipt_id']})
+    if not receipt_doc:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    
+    file_path = storage_path / receipt_doc['pdf_url']
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Receipt file not found")
+    
+    return FileResponse(
+        path=file_path,
+        filename=file_path.name,
+        media_type="application/pdf"
+    )
+
