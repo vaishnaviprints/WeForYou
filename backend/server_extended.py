@@ -846,3 +846,375 @@ async def download_receipt(
         media_type="application/pdf"
     )
 
+
+# ==================== PLEDGE ENDPOINTS ====================
+
+@api_router.post("/pledges", response_model=Pledge)
+async def create_pledge(
+    pledge_data: PledgeCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create a recurring pledge"""
+    campaign = await db.campaigns.find_one({"id": pledge_data.campaign_id})
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    if not campaign.get('allow_recurring', False):
+        raise HTTPException(status_code=400, detail="This campaign does not support recurring donations")
+    
+    pledge = Pledge(
+        **pledge_data.model_dump(),
+        user_id=current_user['sub'],
+        next_charge_at=datetime.now(timezone.utc) + timedelta(days=30)
+    )
+    
+    pledge_dict = pledge.model_dump()
+    pledge_dict['created_at'] = pledge_dict['created_at'].isoformat()
+    if pledge_dict.get('next_charge_at'):
+        pledge_dict['next_charge_at'] = pledge_dict['next_charge_at'].isoformat()
+    
+    await db.pledges.insert_one(pledge_dict)
+    
+    return pledge
+
+@api_router.get("/pledges/my", response_model=List[Pledge])
+async def get_my_pledges(current_user: dict = Depends(get_current_user)):
+    """Get current user's pledges"""
+    pledges = await db.pledges.find(
+        {"user_id": current_user['sub']},
+        {"_id": 0}
+    ).to_list(100)
+    
+    for pledge in pledges:
+        if isinstance(pledge.get('created_at'), str):
+            pledge['created_at'] = datetime.fromisoformat(pledge['created_at'])
+        if pledge.get('next_charge_at') and isinstance(pledge['next_charge_at'], str):
+            pledge['next_charge_at'] = datetime.fromisoformat(pledge['next_charge_at'])
+    
+    return pledges
+
+@api_router.patch("/pledges/{pledge_id}")
+async def update_pledge(
+    pledge_id: str,
+    action: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update pledge status (pause/cancel/activate)"""
+    pledge_doc = await db.pledges.find_one({"id": pledge_id})
+    if not pledge_doc:
+        raise HTTPException(status_code=404, detail="Pledge not found")
+    
+    if pledge_doc['user_id'] != current_user['sub']:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    if action not in ["pause", "cancel", "activate"]:
+        raise HTTPException(status_code=400, detail="Invalid action")
+    
+    status_map = {"pause": "paused", "cancel": "cancelled", "activate": "active"}
+    
+    await db.pledges.update_one(
+        {"id": pledge_id},
+        {"$set": {"status": status_map[action]}}
+    )
+    
+    return {"status": "success", "message": f"Pledge {action}d successfully"}
+
+# ==================== ADMIN ANALYTICS & REPORTS ====================
+
+@api_router.get("/admin/campaigns/{campaign_id}/analytics")
+async def get_campaign_analytics(
+    campaign_id: str,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Get campaign analytics (Admin only)"""
+    campaign = await db.campaigns.find_one({"id": campaign_id}, {"_id": 0})
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    pipeline = [
+        {"$match": {"campaign_id": campaign_id, "status": "success"}},
+        {"$group": {
+            "_id": None,
+            "total_amount": {"$sum": "$amount"},
+            "count": {"$sum": 1},
+            "avg_amount": {"$avg": "$amount"}
+        }}
+    ]
+    
+    result = await db.donations.aggregate(pipeline).to_list(1)
+    stats = result[0] if result else {"total_amount": 0, "count": 0, "avg_amount": 0}
+    
+    top_donors_pipeline = [
+        {"$match": {"campaign_id": campaign_id, "status": "success", "is_anonymous": False}},
+        {"$group": {
+            "_id": "$user_id",
+            "total": {"$sum": "$amount"},
+            "count": {"$sum": 1}
+        }},
+        {"$sort": {"total": -1}},
+        {"$limit": 10}
+    ]
+    
+    top_donors_raw = await db.donations.aggregate(top_donors_pipeline).to_list(10)
+    top_donors = []
+    for donor in top_donors_raw:
+        if donor['_id']:
+            user = await db.users.find_one({"id": donor['_id']}, {"_id": 0, "full_name": 1, "email": 1})
+            if user:
+                top_donors.append({
+                    "name": user['full_name'],
+                    "email": user['email'],
+                    "total_donated": donor['total'],
+                    "donation_count": donor['count']
+                })
+    
+    return {
+        "campaign": campaign,
+        "stats": stats,
+        "top_donors": top_donors
+    }
+
+@api_router.get("/admin/donors")
+async def get_donor_directory(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Get donor directory (Admin only)"""
+    donors_pipeline = [
+        {"$match": {"status": "success"}},
+        {"$group": {
+            "_id": "$user_id",
+            "total_donated": {"$sum": "$amount"},
+            "donation_count": {"$sum": 1},
+            "first_donation": {"$min": "$created_at"},
+            "last_donation": {"$max": "$created_at"}
+        }}
+    ]
+    
+    donors_stats = await db.donations.aggregate(donors_pipeline).to_list(1000)
+    
+    result = []
+    for stats in donors_stats:
+        if stats['_id']:
+            user = await db.users.find_one({"id": stats['_id']}, {"_id": 0, "password_hash": 0})
+            if user:
+                result.append({
+                    "user": user,
+                    "stats": {
+                        "total_donated": stats['total_donated'],
+                        "donation_count": stats['donation_count'],
+                        "first_donation": stats['first_donation'],
+                        "last_donation": stats['last_donation']
+                    }
+                })
+    
+    return result
+
+@api_router.get("/admin/transactions")
+async def get_all_transactions(
+    volunteer_id: Optional[str] = None,
+    payment_mode: Optional[str] = None,
+    status: Optional[str] = None,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Get all transactions with filters"""
+    query = {}
+    if volunteer_id:
+        query['collected_by'] = volunteer_id
+    if payment_mode:
+        query['method'] = payment_mode
+    if status:
+        query['status'] = status
+    
+    transactions = await db.donations.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
+    for txn in transactions:
+        if isinstance(txn.get('created_at'), str):
+            txn['created_at'] = datetime.fromisoformat(txn['created_at'])
+        if isinstance(txn.get('updated_at'), str):
+            txn['updated_at'] = datetime.fromisoformat(txn['updated_at'])
+        
+        # Get campaign title
+        campaign = await db.campaigns.find_one({"id": txn['campaign_id']}, {"_id": 0, "title": 1})
+        txn['campaign_title'] = campaign['title'] if campaign else "Unknown"
+        
+        # Get volunteer name if collected by volunteer
+        if txn.get('collected_by'):
+            volunteer = await db.users.find_one({"volunteer_id": txn['collected_by']}, {"_id": 0, "full_name": 1})
+            txn['volunteer_name'] = volunteer['full_name'] if volunteer else "Unknown"
+    
+    return transactions
+
+@api_router.post("/admin/donations/{donation_id}/refund")
+async def refund_donation(
+    donation_id: str,
+    refund_data: dict,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Refund a donation (Admin only)"""
+    donation_doc = await db.donations.find_one({"id": donation_id})
+    if not donation_doc:
+        raise HTTPException(status_code=404, detail="Donation not found")
+    
+    if donation_doc['status'] != 'success':
+        raise HTTPException(status_code=400, detail="Only successful donations can be refunded")
+    
+    refund = await payment_service.refund_payment(
+        payment_id=donation_doc['payment_ref'],
+        amount=refund_data.get('amount')
+    )
+    
+    await db.donations.update_one(
+        {"id": donation_id},
+        {
+            "$set": {
+                "status": "refunded",
+                "refund_ref": refund['id'],
+                "refund_note": refund_data.get('note', ''),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    refund_amount = refund_data.get('amount', donation_doc['amount'])
+    await db.campaigns.update_one(
+        {"id": donation_doc['campaign_id']},
+        {"$inc": {"current_amount": -refund_amount}}
+    )
+    
+    return {"status": "success", "refund": refund}
+
+# ==================== TERMS & CONDITIONS MANAGEMENT ====================
+
+@api_router.post("/admin/terms")
+async def create_terms(
+    terms_data: TermsCreate,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Create new terms & conditions"""
+    # Deactivate old terms
+    await db.terms.update_many({}, {"$set": {"is_active": False}})
+    
+    terms = TermsConditions(
+        **terms_data.model_dump(),
+        created_by=current_user['sub']
+    )
+    
+    terms_dict = terms.model_dump()
+    terms_dict['created_at'] = terms_dict['created_at'].isoformat()
+    terms_dict['updated_at'] = terms_dict['updated_at'].isoformat()
+    
+    await db.terms.insert_one(terms_dict)
+    
+    return terms
+
+@api_router.get("/terms/active")
+async def get_active_terms():
+    """Get active terms & conditions"""
+    terms = await db.terms.find_one({"is_active": True}, {"_id": 0})
+    if not terms:
+        raise HTTPException(status_code=404, detail="No active terms found")
+    
+    if isinstance(terms.get('created_at'), str):
+        terms['created_at'] = datetime.fromisoformat(terms['created_at'])
+    if isinstance(terms.get('updated_at'), str):
+        terms['updated_at'] = datetime.fromisoformat(terms['updated_at'])
+    
+    return terms
+
+@api_router.get("/admin/terms")
+async def get_all_terms(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Get all terms versions"""
+    terms_list = await db.terms.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    
+    for terms in terms_list:
+        if isinstance(terms.get('created_at'), str):
+            terms['created_at'] = datetime.fromisoformat(terms['created_at'])
+        if isinstance(terms.get('updated_at'), str):
+            terms['updated_at'] = datetime.fromisoformat(terms['updated_at'])
+    
+    return terms_list
+
+@api_router.patch("/admin/terms/{terms_id}/activate")
+async def activate_terms(
+    terms_id: str,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Activate a terms version"""
+    await db.terms.update_many({}, {"$set": {"is_active": False}})
+    await db.terms.update_one({"id": terms_id}, {"$set": {"is_active": True}})
+    
+    return {"status": "success"}
+
+@api_router.delete("/admin/terms/{terms_id}")
+async def delete_terms(
+    terms_id: str,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Delete a terms version"""
+    await db.terms.delete_one({"id": terms_id})
+    return {"status": "success"}
+
+# ==================== WEBHOOK ENDPOINTS ====================
+
+@api_router.post("/webhooks/razorpay")
+async def razorpay_webhook(payload: dict):
+    """Handle Razorpay webhooks (idempotent)"""
+    event = payload.get('event')
+    
+    if event == 'payment.captured':
+        payment = payload.get('payload', {}).get('payment', {}).get('entity', {})
+        order_id = payment.get('order_id')
+        payment_id = payment.get('id')
+        
+        attempt = await db.payment_attempts.find_one({"provider_payload.id": order_id})
+        if not attempt:
+            return {"status": "ignored", "reason": "order not found"}
+        
+        donation_id = attempt['donation_id']
+        
+        donation = await db.donations.find_one({"id": donation_id})
+        if donation['status'] == 'success':
+            return {"status": "already_processed"}
+        
+        await db.donations.update_one(
+            {"id": donation_id},
+            {
+                "$set": {
+                    "status": "success",
+                    "payment_ref": payment_id,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }
+            }
+        )
+        
+        await generate_receipt_background(donation_id)
+        
+    return {"status": "ok"}
+
+# Include the router in the main app
+app.include_router(api_router)
+
+# Mount static files
+app.mount("/storage", StaticFiles(directory=str(storage_path)), name="storage")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    client.close()
+
