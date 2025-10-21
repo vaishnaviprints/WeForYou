@@ -48,7 +48,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="Invalid authentication credentials")
     return payload
 
-async def require_role(required_roles: list):
+def require_role(required_roles: list):
     async def role_checker(current_user: dict = Depends(get_current_user)):
         user_roles = current_user.get("roles", [])
         if not any(role in user_roles for role in required_roles):
