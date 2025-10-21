@@ -133,5 +133,3 @@ const CampaignsPage = () => {
 };
 
 export default CampaignsPage;
-
-import { Users } from 'lucide-react';
