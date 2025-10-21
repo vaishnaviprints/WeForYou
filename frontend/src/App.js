@@ -6,7 +6,11 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 
 // Pages
-import LandingPage from "@/pages/LandingPage";
+import HomePage from "@/pages/HomePage";
+import LoginPage from "@/pages/LoginPage";
+import RegisterPage from "@/pages/RegisterPage";
+import AboutPage from "@/pages/AboutPage";
+import ContactPage from "@/pages/ContactPage";
 import CampaignsPage from "@/pages/CampaignsPage";
 import CampaignDetailPage from "@/pages/CampaignDetailPage";
 import MyDonationsPage from "@/pages/MyDonationsPage";
