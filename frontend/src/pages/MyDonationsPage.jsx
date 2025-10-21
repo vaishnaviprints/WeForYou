@@ -4,10 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import Navbar from '@/components/Navbar';
 import { AuthContext, API } from '@/App';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { ArrowLeft, Download, Receipt, Filter, TrendingUp, Calendar, CreditCard } from 'lucide-react';
+import { Download, Receipt, Filter, TrendingUp, Calendar, CreditCard } from 'lucide-react';
 
 const MyDonationsPage = () => {
   const navigate = useNavigate();
