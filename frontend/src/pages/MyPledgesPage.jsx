@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import Navbar from '@/components/Navbar';
 import { AuthContext, API } from '@/App';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { ArrowLeft, Calendar, Pause, Play, XCircle, RefreshCw } from 'lucide-react';
+import { Calendar, Pause, Play, XCircle, RefreshCw } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
