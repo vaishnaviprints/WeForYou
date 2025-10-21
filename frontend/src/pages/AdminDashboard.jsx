@@ -7,18 +7,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import Navbar from '@/components/Navbar';
 import { AuthContext, API } from '@/App';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { 
-  ArrowLeft, 
   TrendingUp, 
   Users, 
   DollarSign, 
   Target,
   BarChart3,
-  UserCheck,
-  Receipt
+  UserCheck
 } from 'lucide-react';
 
 const AdminDashboard = () => {
