@@ -169,7 +169,7 @@ const MyDonationsPage = () => {
                 <SelectTrigger className="w-48" data-testid="status-filter">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="z-50">
                   <SelectItem value="all">All Donations</SelectItem>
                   <SelectItem value="success">Successful</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
