@@ -76,11 +76,15 @@ function App() {
       <div className="App">
         <BrowserRouter>
           <Routes>
-            <Route path="/" element={<LandingPage />} />
+            <Route path="/" element={<HomePage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/about" element={<AboutPage />} />
+            <Route path="/contact" element={<ContactPage />} />
             <Route path="/campaigns" element={<CampaignsPage />} />
             <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
-            <Route path="/my-donations" element={user ? <MyDonationsPage /> : <Navigate to="/" />} />
-            <Route path="/my-pledges" element={user ? <MyPledgesPage /> : <Navigate to="/" />} />
+            <Route path="/my-donations" element={user ? <MyDonationsPage /> : <Navigate to="/login" />} />
+            <Route path="/my-pledges" element={user ? <MyPledgesPage /> : <Navigate to="/login" />} />
             <Route path="/admin" element={user?.roles?.includes('admin') ? <AdminDashboard /> : <Navigate to="/" />} />
           </Routes>
         </BrowserRouter>
