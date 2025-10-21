@@ -274,3 +274,248 @@ async def admin_update_user_roles(
     
     return {"status": "success", "roles": roles}
 
+
+# ==================== ADMIN - VOLUNTEER MANAGEMENT ====================
+
+@api_router.get("/admin/volunteers")
+async def admin_get_volunteers(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Get all volunteers with their statistics"""
+    volunteers = await db.users.find(
+        {"roles": "volunteer"},
+        {"_id": 0, "password_hash": 0}
+    ).to_list(1000)
+    
+    result = []
+    for vol in volunteers:
+        # Get volunteer stats
+        donations = await db.donations.find({"collected_by": vol['volunteer_id']}).to_list(1000)
+        
+        total_collected = sum(d['amount'] for d in donations if d['status'] in ['success', 'pending_deposit'])
+        cash_collected = sum(d['amount'] for d in donations if d['method'] == 'cash' and d['status'] in ['success', 'pending_deposit'])
+        online_collected = sum(d['amount'] for d in donations if d['method'] != 'cash' and d['status'] == 'success')
+        pending_deposit = sum(d['amount'] for d in donations if d['method'] == 'cash' and d['status'] == 'pending_deposit')
+        
+        vol['stats'] = {
+            'total_collected': total_collected,
+            'cash_collected': cash_collected,
+            'online_collected': online_collected,
+            'pending_deposit': pending_deposit,
+            'total_collections': len(donations)
+        }
+        
+        result.append(vol)
+    
+    return result
+
+@api_router.get("/admin/volunteers/{volunteer_id}/collections")
+async def admin_get_volunteer_collections(
+    volunteer_id: str,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Get all collections by a volunteer"""
+    collections = await db.donations.find(
+        {"collected_by": volunteer_id},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    
+    for collection in collections:
+        if isinstance(collection.get('created_at'), str):
+            collection['created_at'] = datetime.fromisoformat(collection['created_at'])
+        if isinstance(collection.get('updated_at'), str):
+            collection['updated_at'] = datetime.fromisoformat(collection['updated_at'])
+    
+    return collections
+
+@api_router.post("/admin/volunteers/{volunteer_id}/confirm-deposit/{donation_id}")
+async def admin_confirm_cash_deposit(
+    volunteer_id: str,
+    donation_id: str,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Admin confirms cash deposit from volunteer"""
+    donation_doc = await db.donations.find_one({"id": donation_id, "collected_by": volunteer_id})
+    if not donation_doc:
+        raise HTTPException(status_code=404, detail="Donation not found")
+    
+    if donation_doc['method'] != 'cash':
+        raise HTTPException(status_code=400, detail="Only cash donations can be confirmed")
+    
+    await db.donations.update_one(
+        {"id": donation_id},
+        {
+            "$set": {
+                "status": "success",
+                "deposit_confirmed": True,
+                "deposit_confirmed_by": current_user['sub'],
+                "deposit_confirmed_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    # Update campaign totals
+    await db.campaigns.update_one(
+        {"id": donation_doc['campaign_id']},
+        {
+            "$inc": {
+                "current_amount": donation_doc['amount'],
+                "donor_count": 1
+            }
+        }
+    )
+    
+    # Generate receipt
+    await generate_receipt_background(donation_id)
+    
+    return {"status": "success", "message": "Cash deposit confirmed"}
+
+# ==================== VOLUNTEER - COLLECTION ENDPOINTS ====================
+
+@api_router.post("/volunteer/collect-donation")
+async def volunteer_collect_donation(
+    collection_data: VolunteerCollectionCreate,
+    current_user: dict = Depends(require_role(["volunteer"]))
+):
+    """Volunteer collects donation from general user"""
+    # Verify volunteer
+    volunteer = await db.users.find_one({"id": current_user['sub'], "roles": "volunteer"})
+    if not volunteer:
+        raise HTTPException(status_code=403, detail="Only volunteers can collect donations")
+    
+    volunteer_id = volunteer.get('volunteer_id')
+    
+    # Verify campaign exists
+    campaign = await db.campaigns.find_one({"id": collection_data.campaign_id})
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    # Create donation record
+    donation = Donation(
+        campaign_id=collection_data.campaign_id,
+        amount=collection_data.amount,
+        currency="INR",
+        method=collection_data.payment_mode,
+        donor_name=collection_data.donor_name,
+        donor_phone=collection_data.donor_phone,
+        collected_by=volunteer_id,
+        want_80g=collection_data.want_80g,
+        pan=collection_data.pan,
+        address=collection_data.address,
+        status="pending" if collection_data.payment_mode == "online" else "pending_deposit"
+    )
+    
+    donation_dict = donation.model_dump()
+    donation_dict['created_at'] = donation_dict['created_at'].isoformat()
+    donation_dict['updated_at'] = donation_dict['updated_at'].isoformat()
+    
+    await db.donations.insert_one(donation_dict)
+    
+    if collection_data.payment_mode == "cash":
+        # Send confirmation to donor immediately
+        donor_contact = collection_data.donor_phone or collection_data.donor_email
+        if donor_contact:
+            await notification_service.send_donation_confirmation(
+                {**donation_dict, 'campaign_title': campaign['title']},
+                donor_contact,
+                volunteer['full_name']
+            )
+        
+        # Alert volunteer about cash responsibility
+        await notification_service.send_cash_collection_alert(
+            volunteer['email'],
+            collection_data.amount,
+            collection_data.donor_name
+        )
+        
+        # Alert admin
+        admin = await db.users.find_one({"roles": "admin"})
+        if admin:
+            await notification_service.send_admin_cash_alert(
+                admin['email'],
+                volunteer['full_name'],
+                collection_data.amount,
+                collection_data.donor_name
+            )
+        
+        return {
+            "status": "success",
+            "message": "Cash donation collected. Please deposit within 48 hours.",
+            "donation_id": donation.id,
+            "reminder": "You are responsible for depositing this cash to Foundation account"
+        }
+    
+    else:  # Online payment
+        # Create payment order
+        order = await payment_service.create_order(
+            amount=collection_data.amount,
+            currency="INR",
+            donation_id=donation.id,
+            user_email=collection_data.donor_email or volunteer['email']
+        )
+        
+        # Create payment attempt
+        attempt = PaymentAttempt(
+            donation_id=donation.id,
+            provider_payload=order
+        )
+        attempt_dict = attempt.model_dump()
+        attempt_dict['created_at'] = attempt_dict['created_at'].isoformat()
+        await db.payment_attempts.insert_one(attempt_dict)
+        
+        return {
+            "status": "redirect_to_payment",
+            "donation_id": donation.id,
+            "order": order,
+            "razorpay_key": payment_service.razorpay_key_id or "mock_key"
+        }
+
+@api_router.get("/volunteer/my-collections")
+async def volunteer_get_collections(
+    status: Optional[str] = None,
+    current_user: dict = Depends(require_role(["volunteer"]))
+):
+    """Get volunteer's collected donations"""
+    volunteer = await db.users.find_one({"id": current_user['sub']})
+    volunteer_id = volunteer.get('volunteer_id')
+    
+    query = {"collected_by": volunteer_id}
+    if status:
+        query['status'] = status
+    
+    collections = await db.donations.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
+    for collection in collections:
+        if isinstance(collection.get('created_at'), str):
+            collection['created_at'] = datetime.fromisoformat(collection['created_at'])
+        campaign = await db.campaigns.find_one({"id": collection['campaign_id']}, {"_id": 0, "title": 1})
+        collection['campaign_title'] = campaign['title'] if campaign else "Unknown"
+    
+    return collections
+
+@api_router.get("/volunteer/stats")
+async def volunteer_get_stats(
+    current_user: dict = Depends(require_role(["volunteer"]))
+):
+    """Get volunteer's statistics"""
+    volunteer = await db.users.find_one({"id": current_user['sub']})
+    volunteer_id = volunteer.get('volunteer_id')
+    
+    donations = await db.donations.find({"collected_by": volunteer_id}).to_list(1000)
+    
+    total_collected = sum(d['amount'] for d in donations if d['status'] in ['success', 'pending_deposit'])
+    cash_collected = sum(d['amount'] for d in donations if d['method'] == 'cash' and d['status'] in ['success', 'pending_deposit'])
+    online_collected = sum(d['amount'] for d in donations if d['method'] != 'cash' and d['status'] == 'success')
+    pending_deposit = sum(d['amount'] for d in donations if d['method'] == 'cash' and d['status'] == 'pending_deposit')
+    
+    return {
+        'volunteer_id': volunteer_id,
+        'volunteer_name': volunteer['full_name'],
+        'total_collected': total_collected,
+        'cash_collected': cash_collected,
+        'online_collected': online_collected,
+        'pending_deposit': pending_deposit,
+        'total_collections': len(donations)
+    }
+
