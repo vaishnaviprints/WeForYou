@@ -8,10 +8,11 @@ import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import Navbar from '@/components/Navbar';
 import { AuthContext, API } from '@/App';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { ArrowLeft, Heart, Users, Calendar, Shield, Download } from 'lucide-react';
+import { Heart, Users, Shield } from 'lucide-react';
 
 const CampaignDetailPage = () => {
   const { id } = useParams();
