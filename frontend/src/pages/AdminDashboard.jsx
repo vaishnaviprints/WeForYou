@@ -112,19 +112,15 @@ const AdminDashboard = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      <Navbar />
+      
       {/* Header */}
       <div className="bg-white border-b">
-        <div className="container mx-auto px-6 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" onClick={() => navigate('/campaigns')} data-testid="back-btn">
-                <ArrowLeft className="mr-2" /> Back
-              </Button>
-              <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>
-                Admin Dashboard
-              </h1>
-            </div>
-          </div>
+        <div className="container mx-auto px-6 py-8">
+          <h1 className="text-4xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>
+            Admin Dashboard
+          </h1>
+          <p className="text-gray-600 mt-2">Manage campaigns, donors, and track analytics</p>
         </div>
       </div>
 
