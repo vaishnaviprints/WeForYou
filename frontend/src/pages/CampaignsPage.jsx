@@ -41,31 +41,15 @@ const CampaignsPage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      {/* Header */}
+      <Navbar />
+
+      {/* Page Header */}
       <div className="bg-white border-b">
-        <div className="container mx-auto px-6 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" onClick={() => navigate('/')} data-testid="back-home-btn">
-                <ArrowLeft className="mr-2" /> Back
-              </Button>
-              <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>
-                Active Campaigns
-              </h1>
-            </div>
-            {user && (
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => navigate('/my-donations')} data-testid="my-donations-btn">
-                  My Donations
-                </Button>
-                {user.roles?.includes('admin') && (
-                  <Button onClick={() => navigate('/admin')} data-testid="admin-btn">
-                    Admin Dashboard
-                  </Button>
-                )}
-              </div>
-            )}
-          </div>
+        <div className="container mx-auto px-6 py-8">
+          <h1 className="text-4xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>
+            Active Campaigns
+          </h1>
+          <p className="text-gray-600 mt-2">Support causes that matter to you</p>
         </div>
       </div>
 
