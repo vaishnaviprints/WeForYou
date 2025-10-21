@@ -4,10 +4,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
+import Navbar from '@/components/Navbar';
 import { AuthContext, API } from '@/App';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { ArrowLeft, Heart, Target, Calendar } from 'lucide-react';
+import { Heart, Users } from 'lucide-react';
 
 const CampaignsPage = () => {
   const navigate = useNavigate();
