@@ -687,6 +687,249 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ==================== GENERAL DONATION (NO CAMPAIGN) ====================
+
+@api_router.post("/donations/general")
+async def create_general_donation(
+    amount: float,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create general donation to foundation (no campaign required)"""
+    
+    donation = Donation(
+        campaign_id=None,  # No campaign
+        amount=amount,
+        currency="INR",
+        user_id=current_user['sub'],
+        type="GENERAL"
+    )
+    
+    donation_dict = donation.model_dump()
+    donation_dict['created_at'] = donation_dict['created_at'].isoformat()
+    donation_dict['updated_at'] = donation_dict['updated_at'].isoformat()
+    
+    await db.donations.insert_one(donation_dict)
+    
+    user_doc = await db.users.find_one({"id": current_user['sub']})
+    order = await payment_service.create_order(
+        amount=amount,
+        currency="INR",
+        donation_id=donation.id,
+        user_email=user_doc['email']
+    )
+    
+    attempt = PaymentAttempt(
+        donation_id=donation.id,
+        provider_payload=order
+    )
+    attempt_dict = attempt.model_dump()
+    attempt_dict['created_at'] = attempt_dict['created_at'].isoformat()
+    await db.payment_attempts.insert_one(attempt_dict)
+    
+    return {
+        "donation_id": donation.id,
+        "order": order,
+        "razorpay_key": payment_service.razorpay_key_id or "mock_key"
+    }
+
+# ==================== BLOOD DONOR ENDPOINTS ====================
+
+@api_router.post("/blood-donors")
+async def create_blood_donor(
+    donor_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create blood donor with consent"""
+    
+    donor_id = str(uuid.uuid4())
+    donor_dict = {
+        "id": donor_id,
+        "user_id": current_user['sub'],
+        "blood_group": donor_data['blood_group'],
+        "phone": donor_data['phone'],
+        "email": donor_data.get('email'),
+        "full_name": donor_data['full_name'],
+        "age": donor_data['age'],
+        "weight": donor_data['weight'],
+        "city": donor_data.get('city'),
+        "state": donor_data.get('state'),
+        "district": donor_data.get('district'),
+        "availability": True,
+        "last_donation_date": donor_data.get('last_donation_date'),
+        "consent_public": donor_data.get('consent_public', False),
+        "consent_public_at": datetime.now(timezone.utc).isoformat() if donor_data.get('consent_public') else None,
+        "moderation_hidden": False,
+        "contact_reveal_count": 0,
+        "created_by": current_user['sub'],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.blood_donors.insert_one(donor_dict)
+    
+    return {"status": "success", "id": donor_id, "message": "Blood donor registered successfully"}
+
+@api_router.get("/blood-donors/search")
+async def search_blood_donors(
+    group: str,
+    state: Optional[str] = None,
+    district: Optional[str] = None
+):
+    """Public search for blood donors"""
+    query = {
+        "blood_group": group,
+        "consent_public": True,
+        "moderation_hidden": False
+    }
+    
+    if state:
+        query['state'] = state
+    if district:
+        query['district'] = district
+    
+    donors = await db.blood_donors.find(query, {"_id": 0, "created_by": 0}).to_list(100)
+    
+    for donor in donors:
+        if donor.get('phone'):
+            donor['phone_masked'] = donor['phone'][:3] + "***" + donor['phone'][-2:]
+            del donor['phone']
+    
+    return donors
+
+# ==================== ADMIN SITE SETTINGS ====================
+
+@api_router.get("/admin/settings")
+async def get_site_settings(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Get site settings"""
+    settings = await db.site_settings.find_one({}, {"_id": 0})
+    if not settings:
+        # Default settings
+        settings = {
+            "foundation_name": "WeForYou Foundation",
+            "phone": "+91-11-12345678",
+            "email": "donations@weforyou.org",
+            "address": "123 Charity Street, New Delhi, 110001",
+            "about_us": "We are a registered non-profit organization...",
+            "pan": "AAATW1234E",
+            "registration_number": "U85100DL2020NPL123456"
+        }
+    return settings
+
+@api_router.patch("/admin/settings")
+async def update_site_settings(
+    settings_data: dict,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Update site settings"""
+    await db.site_settings.update_one(
+        {},
+        {"$set": settings_data},
+        upsert=True
+    )
+    return {"status": "success", "message": "Settings updated"}
+
+# ==================== ADMIN DATA EXPORTS ====================
+
+@api_router.get("/admin/export/users")
+async def export_users(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Export all users data"""
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(10000)
+    return users
+
+@api_router.get("/admin/export/volunteers")
+async def export_volunteers(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Export volunteers data with stats"""
+    volunteers = await db.users.find({"roles": "volunteer"}, {"_id": 0, "password_hash": 0}).to_list(10000)
+    return volunteers
+
+@api_router.get("/admin/export/transactions")
+async def export_transactions(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Export all transactions"""
+    transactions = await db.donations.find({}, {"_id": 0}).to_list(10000)
+    return transactions
+
+@api_router.get("/admin/export/campaigns")
+async def export_campaigns(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Export campaigns data"""
+    campaigns = await db.campaigns.find({}, {"_id": 0}).to_list(10000)
+    return campaigns
+
+@api_router.get("/admin/export/blood-donors")
+async def export_blood_donors(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Export blood donors data"""
+    donors = await db.blood_donors.find({}, {"_id": 0}).to_list(10000)
+    return donors
+
+# ==================== ADMIN EVENTS MANAGEMENT ====================
+
+@api_router.post("/admin/events")
+async def create_event(
+    event_data: dict,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Admin creates event"""
+    event_id = str(uuid.uuid4())
+    event_dict = {
+        "id": event_id,
+        "title": event_data['title'],
+        "description": event_data['description'],
+        "schedule_start": event_data['schedule_start'],
+        "schedule_end": event_data.get('schedule_end'),
+        "venue": event_data.get('venue'),
+        "capacity": event_data.get('capacity'),
+        "fee_enabled": event_data.get('fee_enabled', False),
+        "fee_amount": event_data.get('fee_amount'),
+        "image_url": event_data.get('image_url'),
+        "created_by": current_user['sub'],
+        "status": "LIVE",
+        "registered_count": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.events.insert_one(event_dict)
+    return {"status": "success", "id": event_id}
+
+@api_router.patch("/admin/events/{event_id}")
+async def update_event(
+    event_id: str,
+    event_data: dict,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Update event"""
+    event_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+    await db.events.update_one({"id": event_id}, {"$set": event_data})
+    return {"status": "success"}
+
+@api_router.delete("/admin/events/{event_id}")
+async def delete_event(
+    event_id: str,
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Delete event"""
+    await db.events.delete_one({"id": event_id})
+    return {"status": "success", "message": "Event deleted"}
+
+@api_router.get("/admin/events")
+async def get_all_events_admin(
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Get all events for admin"""
+    events = await db.events.find({}, {"_id": 0}).to_list(1000)
+    return events
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
