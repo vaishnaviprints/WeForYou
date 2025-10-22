@@ -93,6 +93,17 @@ function App() {
             <Route path="/my-donations" element={user ? <MyDonationsPage /> : <Navigate to="/login" />} />
             <Route path="/my-pledges" element={user ? <MyPledgesPage /> : <Navigate to="/login" />} />
             <Route path="/admin" element={user?.roles?.includes('admin') ? <AdminDashboard /> : <Navigate to="/" />} />
+            
+            {/* Delta Features - Blood Donors */}
+            <Route path="/blood-donors/search" element={<BloodDonorSearchPage />} />
+            <Route path="/blood-donors/register" element={<BloodDonorRegisterPage />} />
+            
+            {/* Delta Features - Events */}
+            <Route path="/events" element={<EventsPage />} />
+            
+            {/* Delta Features - Volunteer */}
+            <Route path="/volunteer/members" element={user?.roles?.includes('volunteer') ? <VolunteerMembersPage /> : <Navigate to="/" />} />
+            <Route path="/volunteer/donate-on-behalf/:memberId" element={user?.roles?.includes('volunteer') ? <OnBehalfDonationPage /> : <Navigate to="/" />} />
           </Routes>
         </BrowserRouter>
         <Toaster position="top-right" richColors />
