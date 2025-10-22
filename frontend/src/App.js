@@ -24,6 +24,7 @@ import OnBehalfDonationPage from "@/pages/OnBehalfDonationPage";
 import BloodDonorSearchPage from "@/pages/BloodDonorSearchPage";
 import BloodDonorRegisterPage from "@/pages/BloodDonorRegisterPage";
 import EventsPage from "@/pages/EventsPage";
+import AdminSettingsPage from "@/pages/AdminSettingsPage";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
