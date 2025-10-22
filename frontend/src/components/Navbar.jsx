@@ -102,6 +102,14 @@ const Navbar = () => {
                     <DropdownMenuItem onClick={() => navigate('/my-pledges')} data-testid="menu-pledges">
                       My Pledges
                     </DropdownMenuItem>
+                    {user.roles?.includes('volunteer') && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => navigate('/volunteer/members')} data-testid="menu-volunteer-members">
+                          My Members
+                        </DropdownMenuItem>
+                      </>
+                    )}
                     {user.roles?.includes('admin') && (
                       <>
                         <DropdownMenuSeparator />
