@@ -52,6 +52,22 @@ const Navbar = () => {
             </Button>
             <Button 
               variant="ghost" 
+              onClick={() => navigate('/events')} 
+              className={isActive('/events') ? 'text-blue-600' : ''}
+              data-testid="nav-events"
+            >
+              Events
+            </Button>
+            <Button 
+              variant="ghost" 
+              onClick={() => navigate('/blood-donors/search')} 
+              className={isActive('/blood-donors') ? 'text-blue-600' : ''}
+              data-testid="nav-blood-donors"
+            >
+              Blood Donors
+            </Button>
+            <Button 
+              variant="ghost" 
               onClick={() => navigate('/about')} 
               className={isActive('/about') ? 'text-blue-600' : ''}
               data-testid="nav-about"
