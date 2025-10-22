@@ -23,7 +23,7 @@ from auth import (
     get_current_user, require_role
 )
 from payment_service import PaymentService
-from pdf_service import PDFService
+from pdf_service_mock import PDFService
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
