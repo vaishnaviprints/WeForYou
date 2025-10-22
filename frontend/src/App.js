@@ -17,6 +17,13 @@ import MyDonationsPage from "@/pages/MyDonationsPage";
 import MyPledgesPage from "@/pages/MyPledgesPage";
 import AdminDashboard from "@/pages/AdminDashboard";
 
+// Delta feature pages
+import VolunteerMembersPage from "@/pages/VolunteerMembersPage";
+import OnBehalfDonationPage from "@/pages/OnBehalfDonationPage";
+import BloodDonorSearchPage from "@/pages/BloodDonorSearchPage";
+import BloodDonorRegisterPage from "@/pages/BloodDonorRegisterPage";
+import EventsPage from "@/pages/EventsPage";
+
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
 
