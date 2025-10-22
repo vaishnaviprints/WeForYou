@@ -106,6 +106,9 @@ function App() {
             <Route path="/volunteer/members" element={user?.roles?.includes('volunteer') ? <VolunteerMembersPage /> : <Navigate to="/" />} />
             <Route path="/volunteer/donate-on-behalf/:memberId" element={user?.roles?.includes('volunteer') ? <OnBehalfDonationPage /> : <Navigate to="/" />} />
           </Routes>
+          
+          {/* Floating Donate Button on All Pages */}
+          <FloatingDonateButton />
         </BrowserRouter>
         <Toaster position="top-right" richColors />
       </div>
